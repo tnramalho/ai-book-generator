@@ -869,6 +869,7 @@ with gr.Blocks(
             description: str,
             language: str,
             model: str,
+            # request: gr.Request,
         ):
             """Initializes the book generation process."""
             try:
@@ -935,6 +936,7 @@ with gr.Blocks(
                 description,
                 language_selection,
                 model_selection,
+                # gr.Request(),
             ],
             outputs=[
                 short_memory,
@@ -958,7 +960,7 @@ with gr.Blocks(
             instruction2: str,
             instruction3: str,
             written_paras: str,
-            request: gr.Request,
+            # request: gr.Request,
             response_file: str,
             book_instance: Book,
             recurrent_workflow: RecurrentGPTWorkflow,
@@ -1027,7 +1029,7 @@ with gr.Blocks(
                 instruction2,
                 instruction3,
                 written_paras,
-                gr.Request(),
+                # gr.Request(),
                 gr.Textbox(label="Response File", visible=False),
                 book_instance,
                 recurrent_workflow,
@@ -1184,7 +1186,7 @@ with gr.Blocks(
             long_memory: str,
             selected_instruction: str,
             written_paras: str,
-            request: gr.Request,
+            # request: gr.Request,
             response_file: str,
             book_instance: Book,
             recurrent_workflow: RecurrentGPTWorkflow,
@@ -1250,7 +1252,7 @@ with gr.Blocks(
                 long_memory_human,
                 selected_instruction_human,
                 written_paras_human,
-                gr.Request(),
+                # gr.Request(),
                 gr.Textbox(label="Response File", visible=False),
                 book_instance,
                 recurrent_workflow,
@@ -1269,9 +1271,11 @@ with gr.Blocks(
             ],
             queue=True,
         )
+    # Print the concurrency count
+    print(f"Concurrency Count: {config.CONCURRENCY_COUNT}")
 
     demo.queue(
-        concurrency_count=config.CONCURRENCY_COUNT
+        # concurrency_count=config.CONCURRENCY_COUNT
     )  # Increased concurrency for better performance
 
 
@@ -1304,4 +1308,6 @@ async def init_db():
 # --- Launch the App ---
 if __name__ == "__main__":
     run_async(init_db())  # Initialize the database asynchronously
-    demo.launch()
+    demo.launch(
+        max_threads=10,
+    )
