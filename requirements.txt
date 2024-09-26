@@ -1,0 +1,9 @@
+gradio
+tiktoken
+python-dotenv
+llama-index
+openai
+textstat
+tortoise-orm
+pydantic
+lancedb
