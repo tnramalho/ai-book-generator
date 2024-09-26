@@ -158,8 +158,8 @@ class Chapter(models.Model):
 
 
 # --- Pydantic Models ---
-# BookSchema = pydantic_model_creator(Book, name="Book")
-# ChapterSchema = pydantic_model_creator(Chapter, name="Chapter")
+BookSchema = pydantic_model_creator(Book, name="Book", exclude_readonly=True)
+ChapterSchema = pydantic_model_creator(Chapter, name="Chapter", exclude_readonly=True)
 
 
 class BookOutputInstruction(BaseModel):
@@ -873,6 +873,8 @@ with gr.Blocks(
         ):
             """Initializes the book generation process."""
             try:
+                # Print the book type
+                print(f"STEP 1")
                 # Create a new book instance
                 book = await Book.create(
                     title=book_type,
@@ -881,11 +883,11 @@ with gr.Blocks(
                     model=model,
                 )
                 book_instance = book
-
+                print(f"STEP 2")
                 # Initialize the workflows
                 recurrent_workflow = RecurrentGPTWorkflow(model_name=model, language=language)
                 human_workflow = HumanWorkflow(model_name=model, language=language)
-
+                print(f"STEP 3")
                 # Prepare initial input data
                 input_data = {
                     "book_type": book_type,
@@ -901,11 +903,11 @@ with gr.Blocks(
                     "new_concept_prompt": "",
                     "relevant_memories": "",
                 }
-
+                print(f"STEP 4")
                 # Run the first step of the recurrent workflow
                 recurrent_output = await recurrent_workflow.run_step(input_data)
                 logger.               info(f"Recurrent Workflow Output: {recurrent_output}")
-
+                print(f"STEP 5")
                 # Update the Gradio interface with the initial output
                 short_memory_text = recurrent_output["output_memory"]["updated_memory"]
                 long_memory_text = ""
@@ -913,7 +915,7 @@ with gr.Blocks(
                 instruction1_text = recurrent_output["output_instruction"]["Instruction_1"]
                 instruction2_text = recurrent_output["output_instruction"]["Instruction_2"]
                 instruction3_text = recurrent_output["output_instruction"]["Instruction_3"]
-
+                print(f"STEP 6")
                 return (
                     short_memory_text,
                     long_memory_text,
