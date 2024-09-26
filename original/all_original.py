@@ -9,30 +9,25 @@ from typing import List, Dict, Optional, Tuple, Union
 import gradio as gr
 import tiktoken
 from dotenv import load_dotenv
-from llama_index.core import VectorStoreIndex
-from llama_index.core import Settings
-from llama_index.core import PromptHelper
-from llama_index.core import PromptTemplate
-
-from llama_index.core.retrievers import VectorIndexRetriever
-# from llama_index.tools.summarization import HuggingFaceSummarization
-from transformers import pipeline
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
-from openai import OpenAI
-# from llama_index.core.prompts import FewShotPromptTemplate
-
-
-from llama_index.core.workflow import (
+from llama_index import (
+    VectorStoreIndex,
+    ServiceContext,
+    VectorIndexRetriever,
+    PromptHelper,
+    HuggingFaceSummarization,
+    HuggingFaceEmbedding,
+    PromptTemplate,
+    FewShotPromptTemplate,
+    PromptType,
     Workflow,
     Event,
     StartEvent,
     StopEvent,
 )
-# from llama_index.llms import OpenAI
-from llama_index.core.node_parser import SimpleFileNodeParser
-
-from llama_index.core.query_engine import RetrieverQueryEngine
-from llama_index.vector_stores.lancedb import LanceDBVectorStore
+from llama_index.llms import OpenAI
+from llama_index.node_parser import SimpleNodeParser
+from llama_index.query_engine import RetrieverQueryEngine
+from llama_index.vector_stores import LanceDBVectorStore
 from llama_index.core.workflow import step
 from llama_index.core.memory import ChatSummaryMemoryBuffer
 from llama_index.core.llms import ChatMessage, MessageRole
@@ -158,8 +153,8 @@ class Chapter(models.Model):
 
 
 # --- Pydantic Models ---
-# BookSchema = pydantic_model_creator(Book, name="Book")
-# ChapterSchema = pydantic_model_creator(Chapter, name="Chapter")
+BookSchema = pydantic_model_creator(Book, name="Book")
+ChapterSchema = pydantic_model_creator(Chapter, name="Chapter")
 
 
 class BookOutputInstruction(BaseModel):
@@ -323,8 +318,8 @@ class RecurrentGPTWorkflow(Workflow):
         self.long_memory: List[str] = []
         self.short_memory: str = ""
         self.output: Dict = {}
-        self.node_parser = SimpleFileNodeParser()
-        self.summarizer = pipeline(
+        self.node_parser = SimpleNodeParser()
+        self.summarizer = HuggingFaceSummarization(
             model_name=config.SUMMARIZATION_MODEL,
             service_context=self.service_context,
         )
@@ -332,7 +327,7 @@ class RecurrentGPTWorkflow(Workflow):
 
         self.few_shot_book_prompt = self.get_story_prompt_template()
 
-    def get_story_prompt_template(self) -> PromptTemplate:
+    def get_story_prompt_template(self) -> FewShotPromptTemplate:
         language = self.language
         prompt_templates = LANGUAGE_PROMPTS
 
@@ -342,7 +337,13 @@ class RecurrentGPTWorkflow(Workflow):
             )
             language = "English"
 
-        template = prompt_templates[language]["init_prompt"] + """
+        return FewShotPromptTemplate(
+            example_prompt=PromptTemplate(
+                prompt=prompt_templates[language]["init_prompt"],
+                prompt_type=PromptType.CUSTOM,
+            ),
+            examples=[],  # Few-shot examples can be dynamically added or loaded
+            suffix="""
 ## Technical Book Writing Assistant
 
 **Your Task:** Develop the next section of our technical book on {book_type}. Consider the previous topic, the current memory, and the instructions for what should be covered next.
@@ -380,26 +381,15 @@ class RecurrentGPTWorkflow(Workflow):
       "updated_memory": "<Updated summary of the book so far>"
     }}
 }}
-```
-
+Use code with caution.
+Python
 Important:
 Keep the Updated Memory concise, around 10-20 sentences.
 Never exceed {max_memory_words} words in the Updated Memory.
 Ensure technical accuracy and clarity. The content should be informative and educational.
-"""
-
-        return PromptTemplate(
-            template=template,
-            input_variables=[
-                "book_type",
-                "input_topic",
-                "current_memory",
-                "related_topics",
-                "input_instruction",
-                "new_concept_prompt",
-                "relevant_memories",
-                "max_memory_words"
-            ]
+""".format(
+                max_memory_words=config.MAX_MEMORY_WORDS
+            ),
         )
 
     @step
@@ -461,10 +451,7 @@ Ensure technical accuracy and clarity. The content should be informative and edu
 
             # Update long-term memory
             self.long_memory.append(parsed_output.output_summary)
-            # STEP 1: Summarize the output summary
             summary = self.summarizer.summarize(parsed_output.output_summary)
-            
-            # STEP 2: Insert the summary into the long-term memory index
             self.long_term_memory_index.insert(summary)
             logger.info("Long-term memory updated.")
 
@@ -745,7 +732,7 @@ with gr.Blocks(
     with gr.Tab("Auto-Generation"):
         with gr.Row():
             with gr.Column():
-                with gr.Row():
+                with gr.Box():
                     with gr.Row():
                         with gr.Column(scale=1, min_width=200):
                             book_type = gr.Textbox(
@@ -789,7 +776,7 @@ with gr.Blocks(
                         max_lines=21,
                         lines=21,
                     )
-                    with gr.Row():
+                    with gr.Box():
                         gr.Markdown("### Readability Metrics\n")
                         clarity = gr.Textbox(label="Clarity")
                         flesch_score = gr.Number(
@@ -802,7 +789,7 @@ with gr.Blocks(
                         calculate_button = gr.Button("Calculate Metrics")
 
             with gr.Column():
-                with gr.Row():
+                with gr.Box():
                     gr.Markdown("### Memory Module\n")
                     short_memory = gr.Textbox(
                         label="Short-Term Memory (editable)",
@@ -814,7 +801,7 @@ with gr.Blocks(
                         max_lines=6,
                         lines=6,
                     )
-                with gr.Row():
+                with gr.Box():
                     gr.Markdown("### Instruction Module\n")
                     with gr.Row():
                         instruction1 = gr.Textbox(
@@ -869,6 +856,7 @@ with gr.Blocks(
             description: str,
             language: str,
             model: str,
+            request: gr.Request,
         ):
             """Initializes the book generation process."""
             try:
@@ -935,6 +923,7 @@ with gr.Blocks(
                 description,
                 language_selection,
                 model_selection,
+                gr.Request(),
             ],
             outputs=[
                 short_memory,
@@ -1067,7 +1056,7 @@ with gr.Blocks(
     with gr.Tab("Human-in-the-Loop"):
         with gr.Row():
             with gr.Column():
-                with gr.Row():
+                with gr.Box():
                     with gr.Row():
                         with gr.Column(scale=1, min_width=200):
                             book_type_human = gr.Textbox(
@@ -1103,7 +1092,7 @@ with gr.Blocks(
                         lines=23,
                     )
             with gr.Column():
-                with gr.Row():
+                with gr.Box():
                     gr.Markdown("### Memory Module\n")
                     short_memory_human = gr.Textbox(
                         label="Short-Term Memory (editable)",
@@ -1115,7 +1104,7 @@ with gr.Blocks(
                         max_lines=6,
                         lines=6,
                     )
-                with gr.Row():
+                with gr.Box():
                     gr.Markdown("### Instruction Module\n")
                     with gr.Row():
                         instruction1_human = gr.Textbox(
@@ -1157,12 +1146,13 @@ with gr.Blocks(
 
         # Initialize Human-in-the-Loop Book Generation
         btn_init_human.click(
-            lambda bt, d, l, m: initialize_book(bt, d, l, m),
+            lambda bt, d, l, m, r: initialize_book(bt, d, l, m, r),
             inputs=[
                 book_type_human,
                 description_human,
                 language_selection_human,
                 model_selection_human,
+                gr.Request(),
             ],
             outputs=[
                 short_memory_human,
