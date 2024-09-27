@@ -12,14 +12,18 @@ from dotenv import load_dotenv
 from llama_index.core import VectorStoreIndex
 from llama_index.core import Settings
 from llama_index.core import PromptHelper
-from llama_index.core import PromptTemplate
+from llama_index.core.prompts import PromptType
+# from llama_index.core import PromptTemplate
 
 from llama_index.core.retrievers import VectorIndexRetriever
 # from llama_index.tools.summarization import HuggingFaceSummarization
 from transformers import pipeline
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
-from openai import OpenAI
+# from openai import OpenAI
+from llama_index.llms.openai import OpenAI
+
 # from llama_index.core.prompts import FewShotPromptTemplate
+from langchain.prompts import FewShotPromptTemplate, PromptTemplate
 
 
 from llama_index.core.workflow import (
@@ -294,66 +298,90 @@ class RecurrentGPTWorkflow(Workflow):
         language: str = config.DEFAULT_LANGUAGE,
     ):
         super().__init__(timeout=120, verbose=True)
+        print(f"STEP 1 [RecurrentGPTWorkflow]")
         self.model_name = model_name
         self.language = language
         self.llm = OpenAI(
             api_key=config.OPENAI_API_KEY, temperature=0, model_name=self.model_name
+            
         )
+        print(f"STEP 2 [RecurrentGPTWorkflow]")
         self.embedder = HuggingFaceEmbedding(model_name=config.EMBEDDING_MODEL)
+        print(f"STEP 3 [RecurrentGPTWorkflow]")
         self.vector_store = LanceDBVectorStore(
             uri=config.LANCEDB_URI, mode="append"
         )
-        self.service_context = ServiceContext.from_defaults(
-            llm=self.llm,
-            prompt_helper=PromptHelper(context_window=config.CONTEXT_WINDOW),
-            embed_model=self.embedder,
-        )
+        print(f"STEP 4.0 [RecurrentGPTWorkflow]", self.llm)
+        try:
+            Settings.llm = self.llm
+        except Exception as e:
+            print(f"Error setting LLM:", e)
+            logger.error(f"Error setting LLM: {e}")
+        print(f"STEP 4.1 [RecurrentGPTWorkflow]")
+        Settings.prompt_helper = PromptHelper(context_window=config.CONTEXT_WINDOW)
+        print(f"STEP 4.2 [RecurrentGPTWorkflow]")
+        Settings.embed_model = self.embedder
+        print(f"STEP 4.3 [RecurrentGPTWorkflow]")
+        self.service_context = Settings
+        print(f"STEP 4.4 [RecurrentGPTWorkflow]")
         self.long_term_memory_index = VectorStoreIndex(
             [], service_context=self.service_context, vector_store=self.vector_store
         )
+        print(f"STEP 6 [RecurrentGPTWorkflow]")
         self.retriever = VectorIndexRetriever(
             index=self.long_term_memory_index, similarity_top_k=5
         )
         self.query_engine = RetrieverQueryEngine(retriever=self.retriever)
-        self.chat_memory = ChatSummaryMemoryBuffer.from_defaults(
-            llm=self.llm,
-            token_limit=config.CHAT_MEMORY_TOKEN_LIMIT,
-            tokenizer_fn=tiktoken.encoding_for_model(self.model_name).encode,
-        )
+        print(f"STEP 7 [RecurrentGPTWorkflow]")
+        # self.chat_memory = ChatSummaryMemoryBuffer.from_defaults(
+        #     llm=self.llm,
+        #     token_limit=config.CHAT_MEMORY_TOKEN_LIMIT,
+        #     tokenizer_fn=tiktoken.encoding_for_model(self.model_name).encode,
+        # )
+        print(f"STEP 8 [RecurrentGPTWorkflow]")
         self.long_memory: List[str] = []
         self.short_memory: str = ""
         self.output: Dict = {}
         self.node_parser = SimpleFileNodeParser()
         self.summarizer = pipeline(
-            model_name=config.SUMMARIZATION_MODEL,
+            task="summarization",
+            model=config.SUMMARIZATION_MODEL,
             service_context=self.service_context,
         )
         self.tokenizer = tiktoken.encoding_for_model(self.model_name).encode
-
+        print(f"STEP 9 [RecurrentGPTWorkflow]")
         self.few_shot_book_prompt = self.get_story_prompt_template()
+        print(f"STEP END [RecurrentGPTWorkflow]")
 
-    def get_story_prompt_template(self) -> PromptTemplate:
+    def get_story_prompt_template(self) -> FewShotPromptTemplate:
         language = self.language
         prompt_templates = LANGUAGE_PROMPTS
-
+        print(f"STEP 10 [RecurrentGPTWorkflow]")
         if language not in prompt_templates:
             logger.warning(
                 f"Unsupported language '{language}'. Defaulting to English."
             )
             language = "English"
-
-        template = prompt_templates[language]["init_prompt"] + """
+        print(f"STEP 11 [RecurrentGPTWorkflow]")
+        return FewShotPromptTemplate(
+            example_prompt=PromptTemplate(
+                input_variables=['book_type', 'description'],
+                template=prompt_templates[language]["init_prompt"],
+                prompt_type=PromptType.CUSTOM,
+            ),
+            examples=[],  # Few-shot examples can be dynamically added or loaded
+            suffix="""
 ## Technical Book Writing Assistant
 
-**Your Task:** Develop the next section of our technical book on {book_type}. Consider the previous topic, the current memory, and the instructions for what should be covered next.
+**Your Task:** Develop the next section of our technical book on {{book_type}}. Consider the previous topic, the current memory, and the instructions for what should be covered next.
 
 **Context:**
-* Current Topic: {input_topic}
-* Current Memory (Summary of the Book So Far): {current_memory}
-* Related Past Topics: {related_topics}
-* Instructions for What Should Happen Next: {input_instruction}
-* New Concept Prompt: {new_concept_prompt}
-* Relevant Memories: {relevant_memories}
+* Current Topic: {{input_topic}}
+* Current Memory (Summary of the Book So Far): {{current_memory}}
+* Related Past Topics: {{related_topics}}
+* Instructions for What Should Happen Next: {{input_instruction}}
+* New Concept Prompt: {{new_concept_prompt}}
+* Relevant Memories: {{relevant_memories}}
 
 **Output Format:**
 ```json
@@ -380,26 +408,15 @@ class RecurrentGPTWorkflow(Workflow):
       "updated_memory": "<Updated summary of the book so far>"
     }}
 }}
-```
-
+Use code with caution.
+Python
 Important:
 Keep the Updated Memory concise, around 10-20 sentences.
-Never exceed {max_memory_words} words in the Updated Memory.
+Never exceed {{max_memory_words}} words in the Updated Memory.
 Ensure technical accuracy and clarity. The content should be informative and educational.
-"""
-
-        return PromptTemplate(
-            template=template,
-            input_variables=[
-                "book_type",
-                "input_topic",
-                "current_memory",
-                "related_topics",
-                "input_instruction",
-                "new_concept_prompt",
-                "relevant_memories",
-                "max_memory_words"
-            ]
+""".format(
+                max_memory_words=config.MAX_MEMORY_WORDS
+            ),
         )
 
     @step
@@ -407,6 +424,7 @@ Ensure technical accuracy and clarity. The content should be informative and edu
         self, ev: Union[StartEvent, OutputValidationError]
     ) -> Union[StoryGenerationDone, StopEvent]:
         """Generates the next section of the technical book."""
+        print(f"STEP - generate_book_section")
         current_retries = await self.ctx.get("retries", default=0)
         if current_retries >= config.MAX_RETRIES:
             logger.warning("Max retries reached.")
@@ -434,7 +452,8 @@ Ensure technical accuracy and clarity. The content should be informative and edu
         logger.info(f"Generating book section with prompt: {prompt[:500]}...")
 
         try:
-            response = await self.llm.acomplete(prompt)
+            logger.debug("STEP 1 acomplete.")
+            response = await self.llm.acomplete(prompt, temperature=0, model_name=self.model_name)
             logger.info("Book section generated successfully.")
         except Exception as e:
             logger.error(f"Error during LLM query: {e}")
@@ -521,8 +540,12 @@ Ensure technical accuracy and clarity. The content should be informative and edu
 
     async def run_step(self, input_data: Dict) -> Dict:
         """Runs the workflow."""
+        print(f"STEP run_step 1 - RecurrentGPTWorkflow - run_step", input_data)
         start_event = StartEvent(input_data=input_data)
-        result_event = await self.arun(start_event)
+        print(f"STEP run_step 2 - StartEvent")
+        result_event = await self.run(start_event)
+        print(f"STEP run_step 3 - RecurrentGPTWorkflow - run_step")
+        
         return result_event.result if isinstance(result_event, StopEvent) else {}
 
 
@@ -553,7 +576,8 @@ class HumanWorkflow(Workflow):
         logger.info(f"Human workflow prompt: {prompt[:500]}...")
 
         try:
-            response = await self.llm.acomplete(prompt)
+            logger.debug("STEP 2 acomplete.")
+            response = await self.llm.acomplete(prompt, model_name=self.model_name)
             logger.info("Human workflow response received.")
         except Exception as e:
             logger.error(f"Error during human workflow LLM query: {e}")
@@ -639,6 +663,8 @@ def init_prompt(book_type: str, description: str, language: str) -> str:
     """Creates the initial prompt for book generation."""
     language = language if language in LANGUAGE_PROMPTS else "English"
     prompt_template = LANGUAGE_PROMPTS[language]["init_prompt"]
+    print(f"STEP prompt_template ", prompt_template)
+    print(f"STEP book_type ", book_type)
     return prompt_template.format(book_type=book_type, description=description)
 
 
@@ -659,9 +685,10 @@ async def generate_chapter(
         section_title = recurrent_output["output_modules"][f"Module_{i}"]
         section_content_initial = recurrent_output["output_summary"]
 
+        logger.debug("STEP 3 acomplete.")
         # Generate questions and answers for each section
         qa_prompt = f"Generate two insightful questions and their comprehensive answers based on the following section content:\n\n{section_content_initial}"
-        qa_response = await recurrent_workflow.llm.acomplete(qa_prompt)
+        qa_response = await recurrent_workflow.llm.acomplete(qa_prompt, model_name=self.model_name)
         logger.info(f"Q&A Response: {qa_response}")
 
         try:
@@ -883,9 +910,10 @@ with gr.Blocks(
                     model=model,
                 )
                 book_instance = book
-                print(f"STEP 2")
+                print(f"STEP 2", model)
                 # Initialize the workflows
                 recurrent_workflow = RecurrentGPTWorkflow(model_name=model, language=language)
+                print(f"STEP 2.2")
                 human_workflow = HumanWorkflow(model_name=model, language=language)
                 print(f"STEP 3")
                 # Prepare initial input data
